@@ -239,12 +239,16 @@ class LoadAnnotations(object):
 
         ann_info = results['ann_info']
         results['gt_bboxes'] = ann_info['bboxes'].copy()
+        results['gt_majors'] = ann_info['majors'].copy()
+        results['gt_minors'] = ann_info['minors'].copy()
 
         gt_bboxes_ignore = ann_info.get('bboxes_ignore', None)
         if gt_bboxes_ignore is not None:
             results['gt_bboxes_ignore'] = gt_bboxes_ignore.copy()
             results['bbox_fields'].append('gt_bboxes_ignore')
         results['bbox_fields'].append('gt_bboxes')
+        results['bbox_fields'].append('gt_majors')
+        results['bbox_fields'].append('gt_minors')
         return results
 
     def _load_labels(self, results):
