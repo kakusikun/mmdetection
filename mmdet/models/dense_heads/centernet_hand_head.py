@@ -1,5 +1,6 @@
 from abc import abstractmethod
 import math
+from collections import defaultdict
 
 import numpy as np
 import torch
@@ -41,12 +42,12 @@ class CenterHandHead(BaseDenseHead, BBoxTestMixin):
 
     def __init__(self,
                  in_channels,
-                 feat_channels={'hm': 1, 'wh': 2, 'offset': 2, 'orie': 8},
+                 feat_channels={'hm': 1, 'wh': 2, 'offset': 2, 'orie': 6},
                  stacked_convs=4,
                  strides=(4, 8, 16, 32, 64),
                  dcn_on_last_conv=False,
                  conv_bias='auto',
-                 loss_hm=dict(type='CenterNetFocalLoss', loss_weight=1.0),
+                 loss_hm=dict(type='GaussianFocalLoss', loss_weight=1.0),
                  loss_wh=dict(type='CenterNetRegL1Loss', loss_weight=1.0),
                  loss_offset=dict(type='CenterNetRegL1Loss', loss_weight=1.0),
                  loss_orie=dict(type='CenterNetRegL1Loss', loss_weight=1.0),
@@ -83,16 +84,29 @@ class CenterHandHead(BaseDenseHead, BBoxTestMixin):
         """Initialize classification conv layers of the head."""
         self.head_convs = nn.ModuleDict()
         for head in self.heads:
-            self.head_convs[head] = ConvModule(
-                                        self.in_channels,
-                                        self.feat_channels[head],
-                                        1,
-                                        stride=1,
-                                        padding=0,
-                                        conv_cfg=self.conv_cfg,
-                                        norm_cfg=self.norm_cfg,
-                                        bias=self.conv_bias
-                                    )
+            if head != 'hm':
+                self.head_convs[head] = ConvModule(
+                                            self.in_channels,
+                                            self.feat_channels[head],
+                                            1,
+                                            stride=1,
+                                            padding=0,
+                                            conv_cfg=self.conv_cfg,
+                                            norm_cfg=self.norm_cfg,
+                                            bias=self.conv_bias
+                                        )
+            else:
+                self.head_convs[head] = ConvModule(
+                                            self.in_channels,
+                                            self.feat_channels[head],
+                                            1,
+                                            stride=1,
+                                            padding=0,
+                                            conv_cfg=self.conv_cfg,
+                                            norm_cfg=self.norm_cfg,
+                                            bias=self.conv_bias,
+                                            act_cfg=dict(type='Sigmoid')
+                                        )
 
     def init_weights(self):
         """Initialize weights of the head."""
@@ -179,13 +193,12 @@ class CenterHandHead(BaseDenseHead, BBoxTestMixin):
         hm_feat, wh_feat, offset_feat, orie_feat = feats
         return hm_feat, wh_feat, offset_feat, orie_feat
 
-    @abstractmethod
     @force_fp32(apply_to=('hm_feat', 'wh_feat', 'offset_feat', 'orie_feat'))
     def loss(self,
-             hm_feat,
-             wh_feat,
-             offset_feat,
-             orie_feat,
+             hm_feats,
+             wh_feats,
+             offset_feats,
+             orie_feats,
              gt_bboxes,
              gt_labels,
              img_metas,
@@ -213,11 +226,63 @@ class CenterHandHead(BaseDenseHead, BBoxTestMixin):
         assert gt_majors is not None
         assert gt_minors is not None
 
+        hm_targets, wh_targets, offset_targets, orie_targets = self.get_targets(
+            hm_feats,
+            gt_bboxes,
+            gt_majors,
+            gt_minors,
+            gt_labels
+        )
+
+        flatten_hm_feats = [
+            hm_feat.permute(0, 2, 3, 1).reshape(-1, self.feat_channels['hm'])
+            for hm_feat in hm_feats
+        ]
+        flatten_wh_feats = [
+            wh_feat.permute(0, 2, 3, 1).reshape(-1, self.feat_channels['wh'])
+            for wh_feat in wh_feats
+        ]
+        flatten_offset_feats = [
+            offset_feat.permute(0, 2, 3, 1).reshape(-1, self.feat_channels['offset'])
+            for offset_feat in offset_feats
+        ]
+        flatten_orie_feats = [
+            orie_feat.permute(0, 2, 3, 1).reshape(-1, self.feat_channels['orie'])
+            for orie_feat in orie_feats
+        ]
+        flatten_hm_targets = [
+            hm_target.permute(1, 2, 0).reshape(-1, self.feat_channels['hm'])
+            for hm_target in hm_targets
+        ]
+
+        flatten_hm_feats = torch.cat(flatten_hm_feats)
+        flatten_wh_feats = torch.cat(flatten_wh_feats)
+        flatten_offset_feats = torch.cat(flatten_offset_feats)
+        flatten_orie_feats = torch.cat(flatten_orie_feats)
+
+        device = flatten_hm_feats.device
+        flatten_hm_targets = torch.cat(flatten_hm_targets).to(device)
+        flatten_wh_targets = torch.cat(wh_targets).to(device)
+        flatten_offset_targets = torch.cat(offset_targets).to(device)
+        flatten_orie_targets = torch.cat(orie_targets).to(device)
+        flatten_mask = flatten_hm_targets == 1.0
+        flatten_mask = torch.nonzero(flatten_mask.squeeze(), as_tuple=False).squeeze()
 
 
-        raise NotImplementedError
+        loss_hm = self.loss_hm(flatten_hm_feats, flatten_hm_targets)
+        loss_wh = self.loss_wh(flatten_wh_feats[flatten_mask], flatten_wh_targets)
+        loss_offset = self.loss_offset(flatten_offset_feats[flatten_mask], flatten_offset_targets)
+        loss_orie = self.loss_orie(flatten_orie_feats[flatten_mask], flatten_orie_targets)
 
-    @abstractmethod
+        return dict(
+            loss_hm=loss_hm,
+            loss_wh=loss_wh,
+            loss_offset=loss_offset,
+            loss_orie=loss_orie,
+        )
+
+
+
     @force_fp32(apply_to=('cls_scores', 'bbox_preds'))
     def get_bboxes(self,
                    cls_scores,
@@ -241,9 +306,8 @@ class CenterHandHead(BaseDenseHead, BBoxTestMixin):
 
         raise NotImplementedError
 
-    @abstractmethod
     def get_targets(self, 
-            hm_feat_sizes,
+            hm_feats,
             gt_bboxes_list,
             gt_majors_list,
             gt_minors_list,
@@ -260,61 +324,70 @@ class CenterHandHead(BaseDenseHead, BBoxTestMixin):
             gt_labels_list (list[Tensor]): Ground truth labels of each box,
                 each has shape (num_gt,).
         """
-        hm_targets = torch.zeros_like(hm_feat)
-        for bidx, gt_bbox in enumerate(gt_bboxes):
-            h, w = gt_bbox[3] - gt_bbox[1], gt_bbox[2] - gt_bbox[0]
-            radius = self._gaussian_radius((math.ceil(h), math.ceil(w)))
+        num_batch = len(gt_bboxes_list)
+        sizes = [(feat.size(2), feat.size(3)) for feat in hm_feats]
+        hm_targets = []
+        wh_targets = []
+        offset_targets = []
+        orie_targets = []
+        for size, stride in zip(sizes, self.strides):
+            hm_target, wh_target, offset_target, orie_target = multi_apply(
+                self._get_targle_single,
+                [size for _ in range(num_batch)],
+                [stride for _ in range(num_batch)],
+                gt_bboxes_list,
+                gt_majors_list,
+                gt_minors_list,
+                gt_labels_list,
+            )
+            hm_targets.append(torch.cat(hm_target))
+            wh_targets.append(torch.cat(wh_target))
+            offset_targets.append(torch.cat(offset_target))
+            orie_targets.append(torch.cat(orie_target))
+        return hm_targets, wh_targets, offset_targets, orie_targets
+
+
+    def _get_targle_single(self,
+            size,
+            stride,
+            gt_bboxes,
+            gt_majors,
+            gt_minors,
+            gt_labels
+        ):
+        feat_h, feat_w = size
+        hm_target = torch.zeros(self.feat_channels['hm'], feat_h, feat_w)
+        wh_target = defaultdict(list)
+        offset_target = defaultdict(list)
+        orie_target = defaultdict(list)
+        for _gt_bbox, _gt_major, _gt_minor, gt_label in zip(gt_bboxes, gt_majors, gt_minors, gt_labels):
+            gt_bbox = _gt_bbox.clone() / stride
+            gt_major = _gt_major.clone() / stride
+            gt_minor = _gt_minor.clone() / stride
+            bh, bw = gt_bbox[3] - gt_bbox[1], gt_bbox[2] - gt_bbox[0]
+            radius = self._gaussian_radius((math.ceil(bh), math.ceil(bw)))
             radius = max(0, int(radius))
-            center = torch.Tensor([(gt_bbox[0] + gt_bbox[2]) / 2, (gt_bbox[1] + gt_bbox[3]) / 2])
+            center = torch.Tensor([gt_bbox[0] + bw / 2, gt_bbox[1] + bh / 2])
             center_int = center.int()
-            self._draw_umich_gaussian(hm_targets[0][bidx], ct_int, radius)
-        wh[k] = 1. * w, 1. * h
-        ind[k] = ct_int[1] * output_w + ct_int[0]
-        reg[k] = center - ct_int
-        reg_mask[k] = 1
-        cat_spec_wh[k, cls_id * 2: cls_id * 2 + 2] = wh[k]
-        cat_spec_mask[k, cls_id * 2: cls_id * 2 + 2] = 1
-        if self.opt.dense_wh:
-          draw_dense_reg(dense_wh, hm.max(axis=0), ct_int, wh[k], radius)
-        gt_det.append([center[0] - w / 2, center[1] - h / 2, 
-                       center[0] + w / 2, center[1] + h / 2, 1, cls_id])
+            self._draw_umich_gaussian(hm_target[gt_label], center_int, radius)
+            wh_target[center_int].append(torch.Tensor([bw, bh]))
+            offset_target[center_int].append(center-center_int)
+            orie_target[center_int].append(
+                torch.stack([
+                    (gt_major[0]-center[0])/bw,
+                    (gt_major[1]-center[1])/bh,
+                    torch.log(torch.abs(gt_minor[2]-gt_minor[0])/bw+0.1),
+                    torch.log(torch.abs(gt_minor[3]-gt_minor[1])/bh+0.1),
+                    torch.log(torch.abs(gt_major[2]-gt_major[0])/bw+0.1),
+                    torch.log(torch.abs(gt_major[3]-gt_major[1])/bh+0.1),
+                ])
+            )
 
+        wh_target = torch.stack([torch.mean(torch.stack(wh), dim=0) for wh in wh_target.values()])
+        offset_target = torch.stack([torch.mean(torch.stack(offset), dim=0) for offset in offset_target.values()]).cuda()
+        orie_target = torch.stack([torch.mean(torch.stack(orie), dim=0) for orie in orie_target.values()])
 
-        
-
-    def _get_points_single(self,
-                           featmap_size,
-                           stride,
-                           dtype,
-                           device,
-                           flatten=False):
-        """Get points of a single scale level."""
-        h, w = featmap_size
-        x_range = torch.arange(w, dtype=dtype, device=device)
-        y_range = torch.arange(h, dtype=dtype, device=device)
-        y, x = torch.meshgrid(y_range, x_range)
-        if flatten:
-            y = y.flatten()
-            x = x.flatten()
-        return y, x
-
-    def get_points(self, featmap_sizes, dtype, device, flatten=False):
-        """Get points according to feature map sizes.
-
-        Args:
-            featmap_sizes (list[tuple]): Multi-level feature map sizes.
-            dtype (torch.dtype): Type of points.
-            device (torch.device): Device of points.
-
-        Returns:
-            tuple: points of each image.
-        """
-        mlvl_points = []
-        for i in range(len(featmap_sizes)):
-            mlvl_points.append(
-                self._get_points_single(featmap_sizes[i], self.strides[i],
-                                        dtype, device, flatten))
-        return mlvl_points
+        return hm_target, wh_target, offset_target, orie_target
 
     def aug_test(self, feats, img_metas, rescale=False):
         """Test function with test time augmentation.
@@ -357,24 +430,26 @@ class CenterHandHead(BaseDenseHead, BBoxTestMixin):
         return min(r1, r2, r3)
 
     def _draw_umich_gaussian(self, heatmap, center, radius, k=1):
-        diameter = 2 * radius + 1
-        gaussian = self._gaussian2D((diameter, diameter), sigma=diameter / 6)
-        
         x, y = int(center[0]), int(center[1])
+        if radius == 0:
+            heatmap[y, x] = 1.
+        else:
+            diameter = 2 * radius
+            gaussian = self._gaussian2D((diameter, diameter), sigma=diameter / 6)
 
-        height, width = heatmap.shape[0:2]
-                
-        left, right = min(x, radius), min(width - x, radius + 1)
-        top, bottom = min(y, radius), min(height - y, radius + 1)
+            height, width = heatmap.shape[0:2]
+                    
+            left, right = min(x, radius), min(width - x, radius)
+            top, bottom = min(y, radius), min(height - y, radius)
 
-        masked_heatmap  = heatmap[y - top:y + bottom, x - left:x + right]
-        masked_gaussian = gaussian[radius - top:radius + bottom, radius - left:radius + right]
-        if min(masked_gaussian.shape) > 0 and min(masked_heatmap.shape) > 0: # TODO debug
-                np.maximum(masked_heatmap, masked_gaussian * k, out=masked_heatmap)
+            masked_heatmap  = heatmap[y - top:y + bottom, x - left:x + right]
+            masked_gaussian = gaussian[radius - top:radius + bottom, radius - left:radius + right]
+            if min(masked_gaussian.shape) > 0 and min(masked_heatmap.shape) > 0: # TODO debug
+                heatmap[y - top:y + bottom, x - left:x + right] = torch.max(torch.stack((masked_heatmap, masked_gaussian * k)), dim=0)[0]
         return heatmap       
 
     def _gaussian2D(self, shape, sigma=1):
-        m, n = [(ss - 1.) / 2. for ss in shape]
+        m, n = [np.ceil((ss - 1.) / 2.) for ss in shape]
         y, x = np.ogrid[-m:m+1,-n:n+1]
 
         h = np.exp(-(x * x + y * y) / (2 * sigma * sigma))

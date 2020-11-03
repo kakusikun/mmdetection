@@ -4,32 +4,31 @@ _base_ = [
 ]
 # model settings
 model = dict(
-    type='FCOS',
-    pretrained='open-mmlab://detectron/resnet50_caffe',
+    type='CenterNet',
+    pretrained='',
     backbone=dict(
-        type='ResNet',
-        depth=50,
-        num_stages=4,
+        type='MobileNetV2',
         out_indices=(0, 1, 2, 3),
-        frozen_stages=1,
-        norm_cfg=dict(type='BN', requires_grad=False),
-        norm_eval=True,
-        style='caffe'),
+        # frozen_stages=1,
+        # norm_cfg=dict(type='BN', requires_grad=False),
+        # norm_eval=True,
+        # style='caffe'
+    ),
     neck=dict(
         type='FPN',
-        in_channels=[256, 512, 1024, 2048],
+        in_channels=[24, 32, 96, 320],
         out_channels=256,
-        start_level=1,
+        start_level=0,
         add_extra_convs=True,
         extra_convs_on_inputs=False,  # use P5
-        num_outs=5,
+        num_outs=4,
         relu_before_extra_convs=True),
     bbox_head=dict(
         type='CenterHandHead',
         in_channels=256,
         feat_channels={'hm': 1, 'wh': 2, 'offset': 2, 'orie': 6},
         stacked_convs=4,
-        strides=(4, 8, 16, 32, 64),
+        strides=(4, 8, 16, 32),
         dcn_on_last_conv=False,
         conv_bias='auto',
         loss_hm=dict(type='GaussianFocalLoss', loss_weight=1.0),
@@ -117,3 +116,4 @@ lr_config = dict(
     warmup_ratio=1.0 / 3,
     step=[8, 11])
 total_epochs = 12
+workflow = [('val', 1), ('val', 1)]

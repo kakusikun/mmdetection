@@ -22,5 +22,5 @@ __all__ = [
     'IoULoss', 'BoundedIoULoss', 'GIoULoss', 'DIoULoss', 'CIoULoss', 'GHMC',
     'GHMR', 'reduce_loss', 'weight_reduce_loss', 'weighted_loss', 'L1Loss',
     'l1_loss', 'isr_p', 'carl_loss', 'AssociativeEmbeddingLoss',
-    'GaussianFocalLoss', 'QualityFocalLoss', 'DistributionFocalLoss'
+    'GaussianFocalLoss', 'QualityFocalLoss', 'DistributionFocalLoss',
 ]
