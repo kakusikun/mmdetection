@@ -1,0 +1,7 @@
+CONFIG=$1
+GPUS=$2
+PORT=${PORT:-29500}
+
+echo $CONFIG
+echo $GPUS
+echo $PORT

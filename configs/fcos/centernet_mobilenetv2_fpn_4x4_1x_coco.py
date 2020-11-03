@@ -71,11 +71,11 @@ test_cfg = dict(
     nms=dict(type='nms', iou_threshold=0.5),
     max_per_img=100)
 img_norm_cfg = dict(
-    mean=[102.9801, 115.9465, 122.7717], std=[1.0, 1.0, 1.0], to_rgb=False)
+    mean=[0.485*255, 0.456*255, 0.406*255], std=[0.229*255, 0.224*255, 0.225*255], to_rgb=True)
 train_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(type='LoadAnnotations', with_bbox=True),
-    dict(type='Resize', img_scale=(640, 480), keep_ratio=True),
+    dict(type='Resize', img_scale=(640, 640), keep_ratio=True),
     dict(type='RandomFlip', flip_ratio=0.5),
     dict(type='Normalize', **img_norm_cfg),
     dict(type='Pad', size_divisor=32),
@@ -86,7 +86,7 @@ test_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(
         type='MultiScaleFlipAug',
-        img_scale=(640, 480),
+        img_scale=(640, 640),
         flip=False,
         transforms=[
             dict(type='Resize', keep_ratio=True),
@@ -98,8 +98,8 @@ test_pipeline = [
         ])
 ]
 data = dict(
-    samples_per_gpu=2,
-    workers_per_gpu=1,
+    samples_per_gpu=8,
+    workers_per_gpu=8,
     train=dict(pipeline=train_pipeline),
     val=dict(pipeline=test_pipeline),
     test=dict(pipeline=test_pipeline))
@@ -110,10 +110,12 @@ optimizer_config = dict(
     _delete_=True, grad_clip=dict(max_norm=35, norm_type=2))
 # learning policy
 lr_config = dict(
-    policy='step',
-    warmup='constant',
-    warmup_iters=500,
+    policy='CosineRestart',
+    period=[10,30,70],
+    restart_weights=[1,1,1],
+    warmup='linear',
+    warmup_iters=10,
     warmup_ratio=1.0 / 3,
-    step=[8, 11])
+    warmup_by_epoch=True)
 total_epochs = 12
-workflow = [('val', 1), ('val', 1)]
+workflow = [('train', 1), ('val', 1)]
