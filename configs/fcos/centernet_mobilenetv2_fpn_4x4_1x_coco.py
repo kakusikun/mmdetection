@@ -98,7 +98,7 @@ test_pipeline = [
         ])
 ]
 data = dict(
-    samples_per_gpu=8,
+    samples_per_gpu=10,
     workers_per_gpu=8,
     train=dict(pipeline=train_pipeline),
     val=dict(pipeline=test_pipeline),
@@ -111,11 +111,13 @@ optimizer_config = dict(
 # learning policy
 lr_config = dict(
     policy='CosineRestart',
-    period=[10,30,70],
+    periods=[10,20,40],
     restart_weights=[1,1,1],
+    min_lr=1e-7,
     warmup='linear',
     warmup_iters=10,
     warmup_ratio=1.0 / 3,
     warmup_by_epoch=True)
-total_epochs = 12
+total_epochs = 80
+work_dir = './tensorboard/centerhand'
 workflow = [('train', 1), ('val', 1)]

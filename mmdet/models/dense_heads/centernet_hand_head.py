@@ -370,9 +370,9 @@ class CenterHandHead(BaseDenseHead, BBoxTestMixin):
             center = torch.Tensor([gt_bbox[0] + bw / 2, gt_bbox[1] + bh / 2])
             center_int = center.int()
             self._draw_umich_gaussian(hm_target[gt_label], center_int, radius)
-            wh_target[center_int].append(torch.Tensor([bw, bh]))
-            offset_target[center_int].append(center-center_int)
-            orie_target[center_int].append(
+            wh_target[tuple(center_int.numpy().tolist())].append(torch.Tensor([bw, bh]))
+            offset_target[tuple(center_int.numpy().tolist())].append(center-center_int)
+            orie_target[tuple(center_int.numpy().tolist())].append(
                 torch.stack([
                     (gt_major[0]-center[0])/bw,
                     (gt_major[1]-center[1])/bh,
@@ -382,11 +382,12 @@ class CenterHandHead(BaseDenseHead, BBoxTestMixin):
                     torch.log(torch.abs(gt_major[3]-gt_major[1])/bh+0.1),
                 ])
             )
-
+        
+        if (hm_target == 1).sum() != len(wh_target):
+            print((hm_target == 1).sum())
         wh_target = torch.stack([torch.mean(torch.stack(wh), dim=0) for wh in wh_target.values()])
         offset_target = torch.stack([torch.mean(torch.stack(offset), dim=0) for offset in offset_target.values()]).cuda()
         orie_target = torch.stack([torch.mean(torch.stack(orie), dim=0) for orie in orie_target.values()])
-
         return hm_target, wh_target, offset_target, orie_target
 
     def aug_test(self, feats, img_metas, rescale=False):
