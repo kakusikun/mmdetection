@@ -102,6 +102,7 @@ class MobileNetV2(nn.Module):
         width_mult: float = 1.0,
         inverted_residual_setting: Optional[List[List[int]]] = None,
         round_nearest: int = 8,
+        norm_cfg=None,
         block: Optional[Callable[..., nn.Module]] = None,
         norm_layer: Optional[Callable[..., nn.Module]] = None
     ) -> None:
@@ -157,6 +158,8 @@ class MobileNetV2(nn.Module):
         # make it nn.Sequential
         self.features = nn.ModuleList(features)
 
+        self.norm_cfg = norm_cfg
+
         # weight initialization
     def init_weights(self, pretrained=None):
         if isinstance(pretrained, str):
@@ -185,7 +188,12 @@ class MobileNetV2(nn.Module):
                     nn.init.zeros_(m.bias)
         else:
             raise TypeError('pretrained must be a str or None')
-
+        
+        if self.norm_cfg is not None and not self.norm_cfg['requires_grad']:
+            for m in self.modules():
+                if isinstance(m, (nn.BatchNorm2d)):
+                    for p in m.parameters():
+                        p.requires_grad = False
 
     def _forward_impl(self, x: Tensor) -> Tensor:
         # This exists since TorchScript doesn't support inheritance, so the superclass method

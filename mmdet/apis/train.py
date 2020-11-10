@@ -125,9 +125,9 @@ def train_detector(model,
             workers_per_gpu=cfg.data.workers_per_gpu,
             dist=distributed,
             shuffle=False)
-        eval_cfg = cfg.get('evaluation', {})
-        eval_hook = DistEvalHook if distributed else EvalHook
-        runner.register_hook(eval_hook(val_dataloader, **eval_cfg))
+        # eval_cfg = cfg.get('evaluation', {})
+        # eval_hook = DistEvalHook if distributed else EvalHook
+        # runner.register_hook(eval_hook(val_dataloader, **eval_cfg))
 
     # user-defined hooks
     if cfg.get('custom_hooks', None):

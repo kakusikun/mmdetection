@@ -42,7 +42,8 @@ class CenterHandHead(BaseDenseHead, BBoxTestMixin):
 
     def __init__(self,
                  in_channels,
-                 feat_channels={'hm': 1, 'wh': 2, 'offset': 2, 'orie': 6},
+                 cls_channels={'hm': 1, 'wh': 2, 'offset': 2, 'orie': 6},
+                 feat_channels=256,
                  stacked_convs=4,
                  strides=(4, 8, 16, 32, 64),
                  dcn_on_last_conv=False,
@@ -56,8 +57,9 @@ class CenterHandHead(BaseDenseHead, BBoxTestMixin):
                  train_cfg=None,
                  test_cfg=None):
         super(CenterHandHead, self).__init__()
-        self.heads = list(feat_channels.keys())
+        self.heads = list(cls_channels.keys())
         self.in_channels = in_channels
+        self.cls_channels = cls_channels
         self.feat_channels = feat_channels
         self.stacked_convs = stacked_convs
         self.strides = strides
@@ -84,30 +86,49 @@ class CenterHandHead(BaseDenseHead, BBoxTestMixin):
         """Initialize classification conv layers of the head."""
         self.head_convs = nn.ModuleDict()
         for head in self.heads:
+            convs = []
+            for i in range(self.stacked_convs):
+                chn = self.in_channels if i == 0 else self.feat_channels
+                convs.append(
+                    ConvModule(
+                        chn,
+                        self.feat_channels,
+                        3,
+                        stride=1,
+                        padding=1,
+                        conv_cfg=self.conv_cfg,
+                        norm_cfg=self.norm_cfg,
+                        bias=self.conv_bias)
+                )
             if head != 'hm':
-                self.head_convs[head] = ConvModule(
-                                            self.in_channels,
-                                            self.feat_channels[head],
-                                            1,
-                                            stride=1,
-                                            padding=0,
-                                            conv_cfg=self.conv_cfg,
-                                            norm_cfg=self.norm_cfg,
-                                            bias=self.conv_bias
-                                        )
+                convs.append(
+                    ConvModule(
+                        chn,
+                        self.cls_channels[head],
+                        3,
+                        stride=1,
+                        padding=1,
+                        conv_cfg=self.conv_cfg,
+                        norm_cfg=self.norm_cfg,
+                        bias=self.conv_bias
+                    )
+                )
             else:
-                self.head_convs[head] = ConvModule(
-                                            self.in_channels,
-                                            self.feat_channels[head],
-                                            1,
-                                            stride=1,
-                                            padding=0,
-                                            conv_cfg=self.conv_cfg,
-                                            norm_cfg=self.norm_cfg,
-                                            bias=self.conv_bias,
-                                            act_cfg=dict(type='Sigmoid')
-                                        )
-
+                convs.append(
+                    ConvModule(
+                        chn,
+                        self.cls_channels[head],
+                        3,
+                        stride=1,
+                        padding=1,
+                        conv_cfg=self.conv_cfg,
+                        norm_cfg=self.norm_cfg,
+                        bias=self.conv_bias,
+                        act_cfg=dict(type='Sigmoid')
+                    )
+                )
+            self.head_convs[head] = nn.Sequential(*convs)
+            
     def init_weights(self):
         """Initialize weights of the head."""
         for n, m in self.head_convs.items():
@@ -235,23 +256,23 @@ class CenterHandHead(BaseDenseHead, BBoxTestMixin):
         )
 
         flatten_hm_feats = [
-            hm_feat.permute(0, 2, 3, 1).reshape(-1, self.feat_channels['hm'])
+            hm_feat.permute(0, 2, 3, 1).reshape(-1, self.cls_channels['hm'])
             for hm_feat in hm_feats
         ]
         flatten_wh_feats = [
-            wh_feat.permute(0, 2, 3, 1).reshape(-1, self.feat_channels['wh'])
+            wh_feat.permute(0, 2, 3, 1).reshape(-1, self.cls_channels['wh'])
             for wh_feat in wh_feats
         ]
         flatten_offset_feats = [
-            offset_feat.permute(0, 2, 3, 1).reshape(-1, self.feat_channels['offset'])
+            offset_feat.permute(0, 2, 3, 1).reshape(-1, self.cls_channels['offset'])
             for offset_feat in offset_feats
         ]
         flatten_orie_feats = [
-            orie_feat.permute(0, 2, 3, 1).reshape(-1, self.feat_channels['orie'])
+            orie_feat.permute(0, 2, 3, 1).reshape(-1, self.cls_channels['orie'])
             for orie_feat in orie_feats
         ]
         flatten_hm_targets = [
-            hm_target.permute(1, 2, 0).reshape(-1, self.feat_channels['hm'])
+            hm_target.permute(1, 2, 0).reshape(-1, self.cls_channels['hm'])
             for hm_target in hm_targets
         ]
 
@@ -269,6 +290,10 @@ class CenterHandHead(BaseDenseHead, BBoxTestMixin):
         flatten_mask = torch.nonzero(flatten_mask.squeeze(), as_tuple=False).squeeze()
 
 
+        # loss_hm = self.loss_hm(flatten_hm_targets, flatten_hm_targets)
+        # loss_wh = self.loss_wh(flatten_wh_targets, flatten_wh_targets)
+        # loss_offset = self.loss_offset(flatten_offset_targets, flatten_offset_targets)
+        # loss_orie = self.loss_orie(flatten_orie_targets, flatten_orie_targets)
         loss_hm = self.loss_hm(flatten_hm_feats, flatten_hm_targets)
         loss_wh = self.loss_wh(flatten_wh_feats[flatten_mask], flatten_wh_targets)
         loss_offset = self.loss_offset(flatten_offset_feats[flatten_mask], flatten_offset_targets)
@@ -356,7 +381,7 @@ class CenterHandHead(BaseDenseHead, BBoxTestMixin):
             gt_labels
         ):
         feat_h, feat_w = size
-        hm_target = torch.zeros(self.feat_channels['hm'], feat_h, feat_w)
+        hm_target = torch.zeros(self.cls_channels['hm'], feat_h, feat_w)
         wh_target = defaultdict(list)
         offset_target = defaultdict(list)
         orie_target = defaultdict(list)

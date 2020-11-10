@@ -27,7 +27,7 @@ except AssertionError:
 @DATASETS.register_module()
 class CocoHandDataset(CustomDataset):
 
-    CLASSES = ('person')
+    CLASSES = ('D', 'DL', 'L', 'UL', 'U', 'UR', 'R', 'DR')
 
     def load_annotations(self, ann_file):
         """Load annotation from COCO style annotation file.
